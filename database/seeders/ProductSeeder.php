@@ -146,10 +146,13 @@ class ProductSeeder extends Seeder
             
             if ($category) {
                 foreach ($categoryGroup['products'] as $productData) {
-                    Product::create(array_merge($productData, [
-                        'category_id' => $category->id,
-                        'is_active' => true,
-                    ]));
+                    Product::firstOrCreate(
+                        ['sku' => $productData['sku']],
+                        array_merge($productData, [
+                            'category_id' => $category->id,
+                            'is_active' => true,
+                        ])
+                    );
                 }
             }
         }

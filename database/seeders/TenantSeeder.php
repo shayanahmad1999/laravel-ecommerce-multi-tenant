@@ -17,24 +17,30 @@ class TenantSeeder extends Seeder
      */
     public function run(): void
     {
-        // Create default tenant
-        $tenant = Tenant::create([
-            'name' => 'Demo E-commerce Store',
-            'domain' => 'localhost',
-            'database' => config('database.connections.mysql.database'),
-            'is_active' => true,
-        ]);
+        // Check if tenant already exists
+        $tenant = Tenant::where('domain', 'localhost')->first();
+
+        if (!$tenant) {
+            // Create default tenant
+            $tenant = Tenant::create([
+                'name' => 'Demo E-commerce Store',
+                'domain' => 'localhost',
+                'database' => config('database.connections.mysql.database'),
+                'is_active' => true,
+            ]);
+        }
         
-        // Set current tenant
-        $tenant->makeCurrent();
+        // Note: Not setting current tenant during seeding to avoid database switching issues
+        // The tenant will be set by the middleware during requests
         
         // Create roles and permissions
         $this->createRolesAndPermissions();
         
         // Create admin user
-        $admin = User::create([
+        $admin = User::firstOrCreate([
+            'email' => 'admin@demo.com'
+        ], [
             'name' => 'Admin User',
-            'email' => 'admin@demo.com',
             'password' => Hash::make('password123'),
             'user_type' => 'admin',
             'tenant_id' => $tenant->id,
@@ -74,7 +80,9 @@ class TenantSeeder extends Seeder
         ];
         
         foreach ($customers as $customerData) {
-            $customer = User::create($customerData);
+            $customer = User::firstOrCreate([
+                'email' => $customerData['email']
+            ], $customerData);
             $customer->assignRole('customer');
         }
         
@@ -95,14 +103,14 @@ class TenantSeeder extends Seeder
             'view reports',
             'manage users',
         ];
-        
+
         foreach ($permissions as $permission) {
-            Permission::create(['name' => $permission]);
+            Permission::firstOrCreate(['name' => $permission]);
         }
         
         // Create roles
-        $adminRole = Role::create(['name' => 'admin']);
-        $customerRole = Role::create(['name' => 'customer']);
+        $adminRole = Role::firstOrCreate(['name' => 'admin']);
+        $customerRole = Role::firstOrCreate(['name' => 'customer']);
         
         // Assign all permissions to admin
         $adminRole->givePermissionTo($permissions);
