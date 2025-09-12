@@ -50,6 +50,91 @@
         .table-responsive {
             border-radius: 0.375rem;
         }
+
+        /* Modal Scroll Enhancements */
+        .modal-dialog-scrollable .modal-body {
+            overflow-y: auto;
+            max-height: calc(100vh - 200px);
+        }
+
+        .modal-dialog-scrollable .modal-content {
+            max-height: 90vh;
+        }
+
+        /* Custom Scrollbar for Modals */
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+
+        /* Firefox scrollbar styling */
+        .modal-dialog-scrollable .modal-body {
+            scrollbar-width: thin;
+            scrollbar-color: #c1c1c1 #f1f1f1;
+        }
+
+        /* Ensure modal content doesn't overflow */
+        .modal-body {
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            padding-right: 15px; /* Space for scrollbar */
+        }
+
+        /* Large modal scroll improvements */
+        .modal-xl .modal-dialog-scrollable .modal-body {
+            max-height: calc(100vh - 150px);
+        }
+
+        .modal-lg .modal-dialog-scrollable .modal-body {
+            max-height: calc(100vh - 180px);
+        }
+
+        /* Default modal scroll improvements */
+        .modal-dialog-scrollable .modal-body {
+            padding-right: 20px; /* Extra space for custom scrollbar */
+        }
+
+        /* Smooth scrolling for better UX */
+        .modal-dialog-scrollable .modal-body {
+            scroll-behavior: smooth;
+        }
+
+        /* Handle pre elements in modals */
+        .modal-body pre {
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-wrap: break-word;
+        }
+
+        /* Handle long URLs and text */
+        .modal-body .text-break {
+            word-break: break-word !important;
+        }
+
+        /* Form elements in scrollable modals */
+        .modal-dialog-scrollable .modal-body .form-control,
+        .modal-dialog-scrollable .modal-body .form-select {
+            margin-bottom: 1rem;
+        }
+
+        /* Ensure buttons don't get cut off */
+        .modal-dialog-scrollable .modal-footer {
+            flex-shrink: 0;
+            border-top: 1px solid #dee2e6;
+        }
     </style>
     @stack('styles')
 </head>
@@ -117,44 +202,11 @@
 
                         @can('view reports')
                             <li class="nav-item">
-                                <a class="nav-link {{ request()->routeIs('reports.*') ? 'active' : '' }}" href="#"
-                                    data-bs-toggle="collapse" data-bs-target="#reportsSubmenu">
+                                <a class="nav-link {{ request()->routeIs('reports.*') ? 'active' : '' }}"
+                                    href="{{ route('reports.index') }}">
                                     <i class="fas fa-chart-bar me-2"></i>
                                     Reports
                                 </a>
-                                <div class="collapse {{ request()->routeIs('reports.*') ? 'show' : '' }}"
-                                    id="reportsSubmenu">
-                                    <ul class="btn-toggle-nav list-unstyled fw-normal pb-1 small">
-                                        @if (Route::has('reports.ledger'))
-                                            <li><a href="{{ route('reports.ledger') }}"
-                                                    class="nav-link text-white rounded ps-4">Ledger</a></li>
-                                        @endif
-                                        @if (Route::has('reports.balance-sheet'))
-                                            <li><a href="{{ route('reports.balance-sheet') }}"
-                                                    class="nav-link text-white rounded ps-4">Balance Sheet</a></li>
-                                        @endif
-                                        @if (Route::has('reports.profit-loss'))
-                                            <li><a href="{{ route('reports.profit-loss') }}"
-                                                    class="nav-link text-white rounded ps-4">Profit & Loss</a></li>
-                                        @endif
-                                        @if (Route::has('reports.sales-analytics'))
-                                            <li><a href="{{ route('reports.sales-analytics') }}"
-                                                    class="nav-link text-white rounded ps-4">Sales Analytics</a></li>
-                                        @endif
-                                        @if (Route::has('reports.inventory'))
-                                            <li><a href="{{ route('reports.inventory') }}"
-                                                    class="nav-link text-white rounded ps-4">Inventory</a></li>
-                                        @endif
-                                        @if (Route::has('reports.customers'))
-                                            <li><a href="{{ route('reports.customers') }}"
-                                                    class="nav-link text-white rounded ps-4">Customer Analytics</a></li>
-                                        @endif
-                                        @if (Route::has('reports.export'))
-                                            <li><a href="{{ route('reports.export') }}"
-                                                    class="nav-link text-white rounded ps-4">Export</a></li>
-                                        @endif
-                                    </ul>
-                                </div>
                             </li>
                         @endcan
 
@@ -320,6 +372,59 @@
         setTimeout(() => {
             $('.alert').alert('close');
         }, 5000);
+
+        // Enhanced Modal Scroll Functionality
+        $(document).ready(function() {
+            // Handle modal show events for better scroll experience
+            $('.modal').on('shown.bs.modal', function() {
+                var modal = $(this);
+                var modalBody = modal.find('.modal-body');
+
+                // Reset scroll position to top when modal opens
+                if (modalBody.length) {
+                    modalBody.scrollTop(0);
+                }
+
+                // Focus on first input if available
+                var firstInput = modal.find('input[type="text"], input[type="email"], textarea, select').first();
+                if (firstInput.length) {
+                    setTimeout(function() {
+                        firstInput.focus();
+                    }, 100);
+                }
+            });
+
+            // Handle modal scroll events for dynamic content loading
+            $('.modal-dialog-scrollable .modal-body').on('scroll', function() {
+                var modalBody = $(this);
+                var scrollTop = modalBody.scrollTop();
+                var scrollHeight = modalBody[0].scrollHeight;
+                var height = modalBody.height();
+
+                // Trigger custom event when near bottom (for infinite scroll if needed)
+                if (scrollTop + height >= scrollHeight - 50) {
+                    modalBody.trigger('modal-scroll-bottom');
+                }
+            });
+        });
+
+        // Utility functions for modal scrolling
+        window.scrollModalToTop = function(modalId) {
+            var modal = $('#' + modalId);
+            var modalBody = modal.find('.modal-body');
+            if (modalBody.length) {
+                modalBody.animate({ scrollTop: 0 }, 300);
+            }
+        };
+
+        window.scrollModalToBottom = function(modalId) {
+            var modal = $('#' + modalId);
+            var modalBody = modal.find('.modal-body');
+            if (modalBody.length) {
+                var scrollHeight = modalBody[0].scrollHeight;
+                modalBody.animate({ scrollTop: scrollHeight }, 300);
+            }
+        };
     </script>
 
     @stack('scripts')
