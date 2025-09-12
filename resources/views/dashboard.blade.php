@@ -245,7 +245,7 @@
                                 </a>
                             </div>
                             <div class="col-md-3">
-                                <a href="{{ route('reports.profit-loss') }}" class="btn btn-outline-info w-100">
+                                <a href="{{ route('reports.index') }}" class="btn btn-outline-info w-100">
                                     <i class="fas fa-chart-line fa-2x d-block mb-2"></i>
                                     View Reports
                                 </a>

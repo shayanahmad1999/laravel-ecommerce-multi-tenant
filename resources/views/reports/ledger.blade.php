@@ -161,7 +161,7 @@
 
     <!-- New/Edit Entry Modal -->
     <div class="modal fade" id="entryModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content">
                 <form id="entryForm">
                     <div class="modal-header">
@@ -706,6 +706,47 @@ store: @json(route('ledger.store')), // POST create entry --}}
             .card-body {
                 padding: 0 !important;
             }
+        }
+
+        /* Modal Scroll Enhancements for Reports */
+        .modal-dialog-scrollable .modal-body {
+            overflow-y: auto;
+            max-height: calc(100vh - 200px);
+        }
+
+        .modal-dialog-scrollable .modal-content {
+            max-height: 90vh;
+        }
+
+        /* Custom Scrollbar for Reports Modals */
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        .modal-dialog-scrollable .modal-body::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+
+        /* Firefox scrollbar styling */
+        .modal-dialog-scrollable .modal-body {
+            scrollbar-width: thin;
+            scrollbar-color: #c1c1c1 #f1f1f1;
+        }
+
+        /* Ensure modal content doesn't overflow */
+        .modal-body {
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
     </style>
 @endpush

@@ -12,6 +12,8 @@
 @endsection
 
 @section('content')
+<meta name="csrf-token" content="{{ csrf_token() }}">
+
 <div class="card">
     <div class="card-header">
         <div class="row align-items-center">
@@ -63,7 +65,7 @@
 
 <!-- Category Modal -->
 <div class="modal fade" id="categoryModal" tabindex="-1" aria-labelledby="categoryModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
             <form id="categoryForm" enctype="multipart/form-data">
                 <div class="modal-header">
@@ -126,19 +128,33 @@
 @push('scripts')
 <script>
 $(document).ready(function() {
+    // CSRF header for all AJAX
+    $.ajaxSetup({
+        headers: {
+            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+        }
+    });
+
     // Initialize DataTable
     const table = $('#categoriesTable').DataTable({
         processing: true,
-        serverSide: false,
+        serverSide: true,
         responsive: true,
         ajax: {
             url: '{{ route("categories.index") }}',
+            type: 'GET',
             data: function(d) {
+                // Add custom search parameters
                 d.search = $('#searchInput').val();
                 d.status = $('#statusFilter').val();
             },
             dataSrc: function(json) {
-                return json.data.data || json.data;
+                // DataTables expects the data array directly
+                return json.data || [];
+            },
+            error: function(xhr, error, thrown) {
+                console.error('DataTables error:', error, thrown);
+                $('#categoriesTableBody').html('<tr><td colspan="7" class="text-center text-danger">Error loading data</td></tr>');
             }
         },
         columns: [
@@ -260,6 +276,24 @@ $(document).ready(function() {
 
 function refreshTable() {
     $('#categoriesTable').DataTable().ajax.reload();
+}
+
+function showLoading() {
+    $('#submitBtn').prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Loading...');
+}
+
+function hideLoading() {
+    $('#submitBtn').prop('disabled', false).html('Save Category');
+}
+
+function showAlert(type, message) {
+    const id = 'alert-' + Math.random().toString(36).slice(2);
+    const html = `<div id="${id}" class="alert alert-${type} alert-dismissible fade show position-fixed top-0 end-0 m-3" role="alert" style="z-index:1080; min-width: 260px;">
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>`;
+    $('body').append(html);
+    setTimeout(() => $('#' + id).alert('close'), 4000);
 }
 
 function openCreateModal() {

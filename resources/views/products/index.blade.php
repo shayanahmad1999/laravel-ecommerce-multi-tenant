@@ -217,7 +217,7 @@
 
     <!-- Stock Update Modal -->
     <div class="modal fade" id="stockModal" tabindex="-1" aria-labelledby="stockModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content">
                 <form id="stockForm">
                     <div class="modal-header">
@@ -290,24 +290,26 @@
             // --------- DataTable ---------
             const table = $('#productsTable').DataTable({
                 processing: true,
-                serverSide: false, // set true if your endpoint supports server-side processing
+                serverSide: true, // enable server-side processing
                 responsive: true,
                 ajax: {
                     url: window.PRODUCTS.routes.index,
+                    type: 'GET',
                     data: function(d) {
+                        // Add custom search parameters
                         d.search = $('#searchInput').val();
                         d.category_id = $('#categoryFilter').val();
                         d.status = $('#statusFilter').val();
                     },
                     dataSrc: function(json) {
-                        // Supports {data: [...]} or {data: {data: [...]}}
-                        return (json?.data?.data) || json?.data || [];
+                        // DataTables expects the data array directly
+                        return json.data || [];
                     },
-                    error: function() {
-                        // graceful empty state
+                    error: function(xhr, error, thrown) {
+                        console.error('DataTables error:', error, thrown);
                         $('#productsTableBody').html(
-                            '<tr><td colspan="8" class="text-center text-muted">Failed to load products.</td></tr>'
-                            );
+                            '<tr><td colspan="8" class="text-center text-danger">Failed to load products.</td></tr>'
+                        );
                     }
                 },
                 columns: [{
@@ -499,7 +501,7 @@
                     reader.onload = (e) => {
                         container.append(
                             `<img src="${e.target.result}" class="img-thumbnail" style="width:100px;height:100px;object-fit:cover;">`
-                            );
+                        );
                     };
                     reader.readAsDataURL(file);
                 });
@@ -598,7 +600,7 @@
                         p.images.forEach(img => {
                             cur.append(
                                 `<img src="/storage/${img}" class="img-thumbnail me-2 mb-2" style="width:100px;height:100px;object-fit:cover;">`
-                                );
+                            );
                         });
                     }
 

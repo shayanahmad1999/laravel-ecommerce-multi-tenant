@@ -95,7 +95,7 @@
 
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-striped table-hover align-middle">
+                <table id="paymentsTable" class="table table-striped table-hover align-middle w-100">
                     <thead>
                         <tr>
                             <th>Payment #</th>
@@ -113,117 +113,194 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse ($payments as $p)
-                            @php
-                                $statusMap = [
-                                    'pending' => 'warning',
-                                    'processing' => 'info',
-                                    'completed' => 'success',
-                                    'failed' => 'danger',
-                                    'refunded' => 'secondary',
-                                    'cancelled' => 'dark',
-                                    'overdue' => 'danger',
-                                ];
-                                $statusClass = $statusMap[$p->status] ?? 'secondary';
-
-                                $isNegative = $p->amount < 0;
-                                $amountAbs = number_format(abs($p->amount), 2);
-                                $amountHtml = $isNegative
-                                    ? "<span class=\"text-danger\">(${$amountAbs})</span>"
-                                    : '$' . number_format($p->amount, 2);
-                            @endphp
-
-                            <tr>
-                                <td><strong>{{ $p->payment_number }}</strong></td>
-                                <td><span class="text-muted">{{ $p->transaction_id ?? '—' }}</span></td>
-                                <td>
-                                    @if ($p->order)
-                                        <a href="{{ url('/orders/' . $p->order->id) }}" class="text-decoration-none">
-                                            {{ $p->order->order_number }}
-                                        </a>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                                @if (Auth::user()->isAdmin())
-                                    <td>
-                                        @if ($p->user)
-                                            <div>{{ $p->user->name }}</div>
-                                            <small class="text-muted">{{ $p->user->email }}</small>
-                                        @else
-                                            <span class="text-muted">—</span>
-                                        @endif
-                                    </td>
-                                @endif
-                                <td>
-                                    @if ($p->payment_type === 'installment')
-                                        <span class="badge bg-info">Installment</span>
-                                    @elseif($p->payment_type === 'refund')
-                                        <span class="badge bg-secondary">Refund</span>
-                                    @else
-                                        <span class="badge bg-success">Full</span>
-                                    @endif
-                                </td>
-                                <td>{{ Str::title(str_replace('_', ' ', $p->payment_method)) }}</td>
-                                <td class="text-end">{!! $amountHtml !!}</td>
-                                <td><span class="badge bg-{{ $statusClass }}">{{ ucfirst($p->status) }}</span></td>
-                                <td>{{ optional($p->created_at)->format('Y-m-d') }}</td>
-                                <td>
-                                    <div class="btn-group">
-                                        {{-- If you have a payments.show route, switch to it; controller supports it --}}
-                                        <a href="{{ url('/payments/' . $p->id) }}" class="btn btn-sm btn-info"
-                                            title="Details">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        @if ($p->order)
-                                            <a href="{{ url('/orders/' . $p->order->id) }}"
-                                                class="btn btn-sm btn-outline-primary" title="View Order">
-                                                <i class="fas fa-receipt"></i>
-                                            </a>
-                                        @endif
-                                    </div>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="{{ Auth::user()->isAdmin() ? 10 : 9 }}" class="text-center text-muted py-4">
-                                    No payments found.
-                                </td>
-                            </tr>
-                        @endforelse
+                        <!-- Payments will be loaded via AJAX -->
                     </tbody>
                 </table>
             </div>
-
-            {{-- Pagination --}}
-            @if ($payments->hasPages())
-                <div class="d-flex justify-content-between align-items-center mt-3">
-                    <div class="small text-muted">
-                        Showing {{ $payments->firstItem() }}–{{ $payments->lastItem() }} of {{ $payments->total() }}
-                    </div>
-                    <div>
-                        {{ $payments->appends(request()->query())->links() }}
-                    </div>
-                </div>
-            @endif
         </div>
     </div>
 @endsection
 
 @push('scripts')
     <script>
-        // Submit filters on Enter in search field
-        document.getElementById('search').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                document.getElementById('filtersForm').submit();
+        // ---------- Routes & helpers ----------
+        window.PAYMENTS = {
+            routes: {
+                index: @json(route('payments.index')),
             }
-        });
+        };
 
-        // Optional: auto-submit on dropdown change
-        ['status', 'payment_type', 'payment_method'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.addEventListener('change', () => document.getElementById('filtersForm').submit());
+        const fmtCurrency = (n) => {
+            const num = Number(n || 0);
+            return num < 0
+                ? `<span class="text-danger">($${Math.abs(num).toFixed(2)})</span>`
+                : '$' + num.toFixed(2);
+        };
+
+        const fmtDate = (d) => {
+            const dt = new Date(d);
+            return isNaN(dt) ? '—' : dt.toLocaleDateString();
+        };
+
+        $(document).ready(function() {
+            // CSRF header for all AJAX
+            $.ajaxSetup({
+                headers: {
+                    'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+                }
+            });
+
+            // Initialize DataTable
+            const table = $('#paymentsTable').DataTable({
+                processing: true,
+                serverSide: true,
+                responsive: true,
+                ajax: {
+                    url: window.PAYMENTS.routes.index,
+                    type: 'GET',
+                    data: function(d) {
+                        // Add custom search parameters
+                        d.search = $('#search').val();
+                        d.status = $('#status').val();
+                        d.payment_type = $('#payment_type').val();
+                        d.payment_method = $('#payment_method').val();
+                        d.date_from = $('#dateFrom').val();
+                        d.date_to = $('#dateTo').val();
+                    },
+                    dataSrc: function(json) {
+                        // DataTables expects the data array directly
+                        return json.data || [];
+                    },
+                    error: function(xhr, error, thrown) {
+                        console.error('DataTables error:', error, thrown);
+                        $('#paymentsTable tbody').html(
+                            '<tr><td colspan="{{ Auth::user()->isAdmin() ? 10 : 9 }}" class="text-center text-danger">Failed to load payments.</td></tr>'
+                        );
+                    }
+                },
+                columns: [
+                    {
+                        data: 'payment_number',
+                        render: function(data) {
+                            return `<strong>${data || '—'}</strong>`;
+                        }
+                    },
+                    {
+                        data: 'transaction_id',
+                        render: function(data) {
+                            return `<span class="text-muted">${data || '—'}</span>`;
+                        }
+                    },
+                    {
+                        data: 'order',
+                        render: function(data) {
+                            if (data && data.order_number) {
+                                return `<a href="/orders/${data.id}" class="text-decoration-none">${data.order_number}</a>`;
+                            }
+                            return '<span class="text-muted">—</span>';
+                        }
+                    },
+                    @if (Auth::user()->isAdmin())
+                    {
+                        data: 'user',
+                        render: function(data) {
+                            if (data) {
+                                return `<div>${data.name || '—'}</div><small class="text-muted">${data.email || ''}</small>`;
+                            }
+                            return '<span class="text-muted">—</span>';
+                        }
+                    },
+                    @endif
+                    {
+                        data: 'payment_type',
+                        render: function(data) {
+                            if (data === 'installment') {
+                                return '<span class="badge bg-info">Installment</span>';
+                            } else if (data === 'refund') {
+                                return '<span class="badge bg-secondary">Refund</span>';
+                            } else {
+                                return '<span class="badge bg-success">Full</span>';
+                            }
+                        }
+                    },
+                    {
+                        data: 'payment_method',
+                        render: function(data) {
+                            return data ? data.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '—';
+                        }
+                    },
+                    {
+                        data: 'amount',
+                        className: 'text-end',
+                        render: function(data) {
+                            return fmtCurrency(data);
+                        }
+                    },
+                    {
+                        data: 'status',
+                        render: function(data) {
+                            const statusMap = {
+                                'pending': 'warning',
+                                'processing': 'info',
+                                'completed': 'success',
+                                'failed': 'danger',
+                                'refunded': 'secondary',
+                                'cancelled': 'dark',
+                                'overdue': 'danger'
+                            };
+                            const statusClass = statusMap[data] || 'secondary';
+                            return `<span class="badge bg-${statusClass}">${data ? data.charAt(0).toUpperCase() + data.slice(1) : '—'}</span>`;
+                        }
+                    },
+                    {
+                        data: 'created_at',
+                        render: function(data) {
+                            return fmtDate(data);
+                        }
+                    },
+                    {
+                        data: null,
+                        orderable: false,
+                        searchable: false,
+                        render: function(data, type, row) {
+                            let actions = `<a href="/payments/${row.id}" class="btn btn-sm btn-info me-1" title="Details"><i class="fas fa-eye"></i></a>`;
+                            if (row.order) {
+                                actions += `<a href="/orders/${row.order.id}" class="btn btn-sm btn-outline-primary" title="View Order"><i class="fas fa-receipt"></i></a>`;
+                            }
+                            return actions;
+                        }
+                    }
+                ],
+                pageLength: 15,
+                order: [[8, 'desc']], // Order by date descending
+                language: {
+                    emptyTable: "No payments found"
+                }
+            });
+
+            // Submit filters on Enter in search field
+            $('#search').on('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    table.ajax.reload();
+                }
+            });
+
+            // Auto-submit on dropdown change
+            $('#status, #payment_type, #payment_method').on('change', function() {
+                table.ajax.reload();
+            });
+
+            // Date range filters
+            $('#dateFrom, #dateTo').on('change', function() {
+                table.ajax.reload();
+            });
+
+            // Refresh button
+            $('.btn-outline-secondary').first().on('click', function(e) {
+                e.preventDefault();
+                table.ajax.reload();
+            });
         });
     </script>
 @endpush
