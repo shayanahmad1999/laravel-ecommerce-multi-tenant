@@ -32,8 +32,7 @@ class Order extends Model
     /**
      * Payment type constants
      */
-    const PAYMENT_CASH = 'cash';
-    const PAYMENT_CARD = 'card';
+    const PAYMENT_INSTANT = 'instant';
     const PAYMENT_INSTALLMENT = 'installment';
 
     /**
@@ -175,8 +174,7 @@ class Order extends Model
     public static function getPaymentTypes(): array
     {
         return [
-            self::PAYMENT_CASH => 'Cash',
-            self::PAYMENT_CARD => 'Card',
+            self::PAYMENT_INSTANT => 'Instant Payment',
             self::PAYMENT_INSTALLMENT => 'Installment',
         ];
     }
