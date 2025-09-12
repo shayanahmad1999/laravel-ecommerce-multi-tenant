@@ -11,10 +11,12 @@ use App\Http\Controllers\Admin\TenantController as AdminTenantController;
 use App\Http\Controllers\Admin\RolePermissionController as AdminRolePermissionController;
 use App\Http\Controllers\DashboardController;
 
-// Public routes
-Route::get('/', function () {
-    return view('welcome');
-})->name('home');
+// Public routes (within tenant context for product display)
+Route::middleware(['tenant'])->group(function () {
+    Route::get('/', function () {
+        return view('welcome');
+    })->name('home');
+});
 
 // Authentication routes
 Auth::routes();
@@ -63,6 +65,7 @@ Route::middleware(['tenant'])->group(function () {
         Route::delete('/{product}', 'destroy')->name('destroy')->middleware('role:admin');
     });
 
+
     // Orders routes
     Route::controller(OrderController::class)->prefix('orders')->name('orders.')->middleware('auth')->group(function () {
         Route::get('/', 'index')->name('index');
@@ -94,13 +97,55 @@ Route::middleware(['tenant'])->group(function () {
 
     // Reports routes
     Route::controller(ReportController::class)->prefix('reports')->name('reports.')->middleware(['auth', 'role:admin'])->group(function () {
-        Route::get('/ledger', 'ledger')->name('ledger');
-        Route::get('/balance-sheet', 'balanceSheet')->name('balance-sheet');
-        Route::get('/profit-loss', 'profitLoss')->name('profit-loss');
-        Route::get('/sales-analytics', 'salesAnalytics')->name('sales-analytics');
-        Route::get('/inventory', 'inventoryReport')->name('inventory');
-        Route::get('/customers', 'customerAnalytics')->name('customers');
-        Route::get('/export', 'exportReport')->name('export');
+        Route::get('/', 'index')->name('index');
+        Route::get('/sales', 'sales')->name('sales');
+        Route::get('/inventory', 'inventory')->name('inventory');
+        Route::get('/orders', 'orders')->name('orders');
+        Route::get('/customers', 'customers')->name('customers');
+        Route::get('/product-performance', 'productPerformance')->name('product-performance');
+        Route::get('/category-performance', 'categoryPerformance')->name('category-performance');
+        Route::get('/payment-methods', 'paymentMethods')->name('payment-methods');
+        Route::get('/installments', 'installments')->name('installments');
+        Route::get('/low-stock', 'lowStock')->name('low-stock');
+        Route::get('/revenue-trends', 'revenueTrends')->name('revenue-trends');
+        Route::get('/export-pdf', 'exportPdf')->name('export-pdf');
+    });
+});
+
+// Public API routes for frontend (within tenant context)
+Route::middleware(['tenant'])->prefix('api')->group(function () {
+    Route::get('/products', function () {
+        $products = \App\Models\Product::with('category')
+            ->active()
+            ->inStock()
+            ->paginate(12);
+
+        return response()->json([
+            'success' => true,
+            'data' => $products->items(),
+            'next_page_url' => $products->nextPageUrl(),
+            'current_page' => $products->currentPage(),
+            'last_page' => $products->lastPage(),
+        ]);
+    });
+
+    Route::get('/products/{product}', function (\App\Models\Product $product) {
+        $product->load('category');
+        return response()->json([
+            'success' => true,
+            'data' => $product,
+        ]);
+    });
+
+    Route::get('/categories', function () {
+        $categories = \App\Models\Category::active()
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $categories,
+        ]);
     });
 });
 
@@ -120,12 +165,15 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'role:admin'])->grou
 
     // Users CRUD
     Route::get('/users', [AdminRolePermissionController::class, 'users'])->name('users.index');
+    Route::get('/users/search', [AdminRolePermissionController::class, 'searchCustomers'])->name('users.search');
     Route::get('/users/create', [AdminRolePermissionController::class, 'createUserForm'])->name('users.create');
     Route::post('/users', [AdminRolePermissionController::class, 'storeUser'])->name('users.store');
     Route::get('/users/{user}/edit', [AdminRolePermissionController::class, 'editUser'])->name('users.edit');
     Route::put('/users/{user}', [AdminRolePermissionController::class, 'updateUser'])->name('users.update');
     Route::delete('/users/{user}', [AdminRolePermissionController::class, 'destroyUser'])->name('users.destroy');
     Route::put('/users/{user}/assign-role', [AdminRolePermissionController::class, 'assignUserRole'])->name('users.assign-role');
+
+
 
     // Roles CRUD
     Route::get('/roles', [AdminRolePermissionController::class, 'roles'])->name('roles.index');
