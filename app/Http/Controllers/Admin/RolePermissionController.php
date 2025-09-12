@@ -112,8 +112,13 @@ class RolePermissionController extends Controller
 	               'address' => $validated['address'] ?? null,
 	           ]);
 
+	           // Auto-assign role based on user_type if no role specified
 	           if (!empty($validated['role'])) {
 	               $user->assignRole($validated['role']);
+	           } elseif ($validated['user_type'] === 'customer') {
+	               $user->assignRole('customer');
+	           } elseif ($validated['user_type'] === 'admin') {
+	               $user->assignRole('admin');
 	           }
 
 	           Log::info("User '{$user->email}' created by " . Auth::user()?->email);
@@ -480,4 +485,53 @@ class RolePermissionController extends Controller
 	           return back()->with('error', 'Failed to delete permission.');
 	       }
 	   }
-}
+	
+	   /**
+	    * Search customers for order creation.
+	    *
+	    * @param Request $request
+	    * @return \Illuminate\Http\JsonResponse
+	    */
+	   public function searchCustomers(Request $request)
+	   {
+	       try {
+	           $search = $request->get('search', '');
+	           $role = $request->get('role', 'customer');
+	
+	           $query = User::query();
+	
+	           // Filter by role if specified
+	           if ($role) {
+	               $query->whereHas('roles', function ($q) use ($role) {
+	                   $q->where('name', $role);
+	               });
+	           }
+	
+	           // Search by name or email
+	           if (!empty($search)) {
+	               $query->where(function ($q) use ($search) {
+	                   $q->where('name', 'like', "%{$search}%")
+	                     ->orWhere('email', 'like', "%{$search}%");
+	               });
+	           }
+	
+	           $customers = $query->select('id', 'name', 'email', 'phone')
+	                              ->orderBy('name')
+	                              ->limit(20)
+	                              ->get();
+	
+	           return response()->json([
+	               'success' => true,
+	               'data' => $customers,
+	               'count' => $customers->count()
+	           ]);
+	
+	       } catch (\Exception $e) {
+	           Log::error('Error searching customers: ' . $e->getMessage());
+	           return response()->json([
+	               'success' => false,
+	               'message' => 'Failed to search customers'
+	           ], 500);
+	       }
+	   }
+	}

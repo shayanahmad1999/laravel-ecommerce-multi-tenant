@@ -2,27 +2,23 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Category;
-use App\Models\Installment;
 use App\Models\Order;
-use App\Models\OrderItem;
-use App\Models\Payment;
 use App\Models\Product;
+use App\Models\User;
+use App\Models\Category;
 use Carbon\Carbon;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\View\View;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Report Controller
  *
- * Handles financial and analytical reporting for the e-commerce system.
- * Provides comprehensive reports including ledger, balance sheet, profit & loss,
- * sales analytics, inventory, and customer analytics.
+ * Handles essential reporting for the e-commerce system.
+ * Provides key reports: Sales, Inventory, Orders, and Customers with PDF export.
  */
 class ReportController extends Controller
 {
@@ -35,808 +31,808 @@ class ReportController extends Controller
     }
 
     /**
-     * Display the ledger report.
-     *
-     * @param Request $request
-     * @return View|JsonResponse
+     * Display reports index page
      */
-    public function ledger(Request $request)
+    public function index(): View
     {
-        try {
-            $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
-            $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
-
-            // Validate date range
-            if (Carbon::parse($dateFrom)->gt(Carbon::parse($dateTo))) {
-                return back()->with('error', 'Start date cannot be after end date.');
-            }
-
-            if ($request->expectsJson()) {
-                return $this->getLedgerData($dateFrom, $dateTo);
-            }
-
-            return view('reports.ledger', compact('dateFrom', 'dateTo'));
-        } catch (\Exception $e) {
-            Log::error('Error loading ledger report: ' . $e->getMessage());
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to load ledger report.',
-                ], 500);
-            }
-
-            return back()->with('error', 'Failed to load ledger report.');
-        }
+        return view('reports.index');
     }
 
     /**
-     * Show balance sheet
+     * Sales Report - Summary of sales with date range
      */
-    public function balanceSheet(Request $request)
-    {
-        $asOfDate = $request->as_of_date ?? Carbon::now()->format('Y-m-d');
-        
-        if ($request->expectsJson()) {
-            return $this->getBalanceSheetData($asOfDate);
-        }
-        
-        return view('reports.balance-sheet', compact('asOfDate'));
-    }
-
-    /**
-     * Show profit & loss statement
-     */
-    public function profitLoss(Request $request)
+    public function sales(Request $request)
     {
         $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
         $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
-        
+
         if ($request->expectsJson()) {
-            return $this->getProfitLossData($dateFrom, $dateTo);
+            return $this->getSalesData($dateFrom, $dateTo);
         }
-        
-        return view('reports.profit-loss', compact('dateFrom', 'dateTo'));
+
+        return view('reports.sales', compact('dateFrom', 'dateTo'));
     }
 
     /**
-     * Get ledger data
+     * Inventory Report - Current stock levels
      */
-    private function getLedgerData($dateFrom, $dateTo): JsonResponse
+    public function inventory(Request $request)
     {
-        // Get all financial transactions
-        $transactions = collect();
-        
-        // Sales transactions (Credit)
-        $sales = Payment::with(['order', 'user'])
-            ->where('status', 'completed')
-            ->whereDate('processed_at', '>=', $dateFrom)
-            ->whereDate('processed_at', '<=', $dateTo)
-            ->where('amount', '>', 0)
-            ->get()
-            ->map(function ($payment) {
-                return [
-                    'date' => $payment->processed_at->format('Y-m-d'),
-                    'description' => "Payment received for Order #{$payment->order->order_number}",
-                    'reference' => $payment->payment_number,
-                    'debit' => 0,
-                    'credit' => $payment->amount,
-                    'balance' => 0, // Will be calculated
-                    'type' => 'payment',
-                    'customer' => $payment->user->name ?? 'Unknown',
-                ];
-            });
-        
-        // Refund transactions (Debit)
-        $refunds = Payment::with(['order', 'user'])
-            ->where('status', 'completed')
-            ->where('payment_type', 'refund')
-            ->whereDate('processed_at', '>=', $dateFrom)
-            ->whereDate('processed_at', '<=', $dateTo)
-            ->get()
-            ->map(function ($payment) {
-                return [
-                    'date' => $payment->processed_at->format('Y-m-d'),
-                    'description' => "Refund for Order #{$payment->order->order_number}",
-                    'reference' => $payment->payment_number,
-                    'debit' => abs($payment->amount),
-                    'credit' => 0,
-                    'balance' => 0,
-                    'type' => 'refund',
-                    'customer' => $payment->user->name ?? 'Unknown',
-                ];
-            });
-        
-        // Combine and sort transactions
-        $transactions = $sales->concat($refunds)->sortBy('date')->values();
-        
-        // Calculate running balance
-        $runningBalance = 0;
-        $transactions = $transactions->map(function ($transaction) use (&$runningBalance) {
-            $runningBalance += ($transaction['credit'] - $transaction['debit']);
-            $transaction['balance'] = $runningBalance;
-            return $transaction;
-        });
-        
-        $summary = [
-            'total_debits' => $transactions->sum('debit'),
-            'total_credits' => $transactions->sum('credit'),
-            'net_change' => $transactions->sum('credit') - $transactions->sum('debit'),
-            'closing_balance' => $runningBalance,
-        ];
+        if ($request->expectsJson()) {
+            return $this->getInventoryData($request);
+        }
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'transactions' => $transactions,
-                'summary' => $summary,
-                'period' => [
-                    'from' => $dateFrom,
-                    'to' => $dateTo,
-                ],
-            ],
-        ]);
+        return view('reports.inventory');
     }
 
     /**
-     * Get balance sheet data
+     * Orders Report - Order details and status
      */
-    private function getBalanceSheetData($asOfDate): JsonResponse
+    public function orders(Request $request)
     {
-        // Assets
-        $assets = [
-            'current_assets' => [
-                'cash' => Payment::where('status', 'completed')
-                              ->where('amount', '>', 0)
-                              ->whereDate('processed_at', '<=', $asOfDate)
-                              ->sum('amount') - 
-                         Payment::where('status', 'completed')
-                              ->where('payment_type', 'refund')
-                              ->whereDate('processed_at', '<=', $asOfDate)
-                              ->sum(DB::raw('ABS(amount)')),
-                'inventory' => Product::whereDate('created_at', '<=', $asOfDate)
-                                   ->sum(DB::raw('stock_quantity * cost_price')),
-                'accounts_receivable' => Installment::where('status', 'pending')
-                                                  ->whereHas('order', function ($query) use ($asOfDate) {
-                                                      $query->whereDate('created_at', '<=', $asOfDate);
-                                                  })
-                                                  ->sum('total_amount'),
-            ],
-        ];
-        
-        $assets['current_assets']['total'] = array_sum($assets['current_assets']);
-        $assets['total_assets'] = $assets['current_assets']['total'];
-        
-        // Liabilities
-        $liabilities = [
-            'current_liabilities' => [
-                'accounts_payable' => 0, // Could be supplier invoices
-                'accrued_expenses' => 0,
-            ],
-        ];
-        
-        $liabilities['current_liabilities']['total'] = array_sum($liabilities['current_liabilities']);
-        $liabilities['total_liabilities'] = $liabilities['current_liabilities']['total'];
-        
-        // Equity
-        $equity = [
-            'retained_earnings' => $assets['total_assets'] - $liabilities['total_liabilities'],
-        ];
-        $equity['total_equity'] = $equity['retained_earnings'];
-        
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'assets' => $assets,
-                'liabilities' => $liabilities,
-                'equity' => $equity,
-                'as_of_date' => $asOfDate,
-            ],
-        ]);
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
+
+        if ($request->expectsJson()) {
+            return $this->getOrdersData($dateFrom, $dateTo, $request);
+        }
+
+        return view('reports.orders', compact('dateFrom', 'dateTo'));
     }
 
     /**
-     * Get profit & loss data
+     * Customers Report - Customer list and order history
      */
-    private function getProfitLossData($dateFrom, $dateTo): JsonResponse
+    public function customers(Request $request)
     {
-        // Revenue
-        $revenue = [
-            'sales_revenue' => Payment::where('status', 'completed')
-                                    ->where('amount', '>', 0)
-                                    ->whereDate('processed_at', '>=', $dateFrom)
-                                    ->whereDate('processed_at', '<=', $dateTo)
-                                    ->sum('amount'),
-            'refunds' => Payment::where('status', 'completed')
-                              ->where('payment_type', 'refund')
-                              ->whereDate('processed_at', '>=', $dateFrom)
-                              ->whereDate('processed_at', '<=', $dateTo)
-                              ->sum(DB::raw('ABS(amount)')),
-        ];
-        
-        $revenue['net_revenue'] = $revenue['sales_revenue'] - $revenue['refunds'];
-        
-        // Cost of Goods Sold
-        $cogs = OrderItem::whereHas('order', function ($query) use ($dateFrom, $dateTo) {
-                    $query->whereIn('status', ['processing', 'shipped', 'delivered'])
-                          ->whereDate('created_at', '>=', $dateFrom)
-                          ->whereDate('created_at', '<=', $dateTo);
-                })
-                ->join('products', 'order_items.product_id', '=', 'products.id')
-                ->sum(DB::raw('order_items.quantity * products.cost_price'));
-        
-        // Gross Profit
-        $grossProfit = $revenue['net_revenue'] - $cogs;
-        
-        // Operating Expenses (simplified)
-        $expenses = [
-            'shipping_costs' => Order::whereIn('status', ['processing', 'shipped', 'delivered'])
-                                  ->whereDate('created_at', '>=', $dateFrom)
-                                  ->whereDate('created_at', '<=', $dateTo)
-                                  ->sum('shipping_cost'),
-            'processing_fees' => $revenue['sales_revenue'] * 0.025, // 2.5% processing fee
-            'other_expenses' => 0,
-        ];
-        
-        $expenses['total_expenses'] = array_sum($expenses);
-        
-        // Net Profit
-        $netProfit = $grossProfit - $expenses['total_expenses'];
-        
-        // Profit margins
-        $profitMargins = [
-            'gross_margin' => $revenue['net_revenue'] > 0 ? ($grossProfit / $revenue['net_revenue']) * 100 : 0,
-            'net_margin' => $revenue['net_revenue'] > 0 ? ($netProfit / $revenue['net_revenue']) * 100 : 0,
-        ];
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'revenue' => $revenue,
-                'cogs' => $cogs,
-                'gross_profit' => $grossProfit,
-                'expenses' => $expenses,
-                'net_profit' => $netProfit,
-                'profit_margins' => $profitMargins,
-                'period' => [
-                    'from' => $dateFrom,
-                    'to' => $dateTo,
-                ],
-            ],
-        ]);
+        if ($request->expectsJson()) {
+            return $this->getCustomersData($dateFrom, $dateTo);
+        }
+
+        return view('reports.customers', compact('dateFrom', 'dateTo'));
     }
 
     /**
-     * Get sales analytics
+     * Product Performance Report - Best selling products and profit analysis
      */
-    public function salesAnalytics(Request $request)
+    public function productPerformance(Request $request)
+    {
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
+
+        if ($request->expectsJson()) {
+            return $this->getProductPerformanceData($dateFrom, $dateTo, $request);
+        }
+
+        return view('reports.product-performance', compact('dateFrom', 'dateTo'));
+    }
+
+    /**
+     * Category Performance Report - Category sales analysis
+     */
+    public function categoryPerformance(Request $request)
+    {
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
+
+        if ($request->expectsJson()) {
+            return $this->getCategoryPerformanceData($dateFrom, $dateTo);
+        }
+
+        return view('reports.category-performance', compact('dateFrom', 'dateTo'));
+    }
+
+    /**
+     * Payment Methods Report - Payment method analysis
+     */
+    public function paymentMethods(Request $request)
+    {
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
+
+        if ($request->expectsJson()) {
+            return $this->getPaymentMethodsData($dateFrom, $dateTo);
+        }
+
+        return view('reports.payment-methods', compact('dateFrom', 'dateTo'));
+    }
+
+    /**
+     * Installment Report - Installment payment tracking
+     */
+    public function installments(Request $request)
+    {
+        if ($request->expectsJson()) {
+            return $this->getInstallmentsData($request);
+        }
+
+        return view('reports.installments');
+    }
+
+    /**
+     * Low Stock Alert Report - Products needing restock
+     */
+    public function lowStock(Request $request)
+    {
+        if ($request->expectsJson()) {
+            return $this->getLowStockData($request);
+        }
+
+        return view('reports.low-stock');
+    }
+
+    /**
+     * Revenue Trends Report - Daily/weekly/monthly revenue analysis
+     */
+    public function revenueTrends(Request $request)
+    {
+        $period = $request->period ?? 'daily';
+        $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
+        $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
+
+        if ($request->expectsJson()) {
+            return $this->getRevenueTrendsData($dateFrom, $dateTo, $period);
+        }
+
+        return view('reports.revenue-trends', compact('dateFrom', 'dateTo', 'period'));
+    }
+
+    /**
+     * Export report as PDF
+     */
+    public function exportPdf(Request $request)
     {
         try {
-            $period = $request->period ?? 'month'; // day, week, month, year
-            $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
-            $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
-
-            if ($request->expectsJson()) {
-                // Sales by period
-                $salesByPeriod = Order::selectRaw(
-                        "strftime('%Y-%m-%d', created_at) as period,
-                        COUNT(*) as orders_count,
-                        SUM(total_amount) as total_sales"
-                    )
-                    ->whereIn('status', ['processing', 'shipped', 'delivered'])
-                    ->whereDate('created_at', '>=', $dateFrom)
-                    ->whereDate('created_at', '<=', $dateTo)
-                    ->groupBy('period')
-                    ->orderBy('period')
-                    ->get();
-
-                // Top products
-                $topProducts = OrderItem::select(
-                        'products.name',
-                        DB::raw('SUM(order_items.quantity) as total_sold'),
-                        DB::raw('SUM(order_items.total_price) as total_revenue')
-                    )
-                    ->join('products', 'order_items.product_id', '=', 'products.id')
-                    ->join('orders', 'order_items.order_id', '=', 'orders.id')
-                    ->whereIn('orders.status', ['processing', 'shipped', 'delivered'])
-                    ->whereDate('orders.created_at', '>=', $dateFrom)
-                    ->whereDate('orders.created_at', '<=', $dateTo)
-                    ->groupBy('products.id', 'products.name')
-                    ->orderBy('total_revenue', 'desc')
-                    ->limit(10)
-                    ->get();
-
-                // Sales by category
-                $salesByCategory = OrderItem::select(
-                        'categories.name',
-                        DB::raw('SUM(order_items.quantity) as total_sold'),
-                        DB::raw('SUM(order_items.total_price) as total_revenue')
-                    )
-                    ->join('products', 'order_items.product_id', '=', 'products.id')
-                    ->join('categories', 'products.category_id', '=', 'categories.id')
-                    ->join('orders', 'order_items.order_id', '=', 'orders.id')
-                    ->whereIn('orders.status', ['processing', 'shipped', 'delivered'])
-                    ->whereDate('orders.created_at', '>=', $dateFrom)
-                    ->whereDate('orders.created_at', '<=', $dateTo)
-                    ->groupBy('categories.id', 'categories.name')
-                    ->orderBy('total_revenue', 'desc')
-                    ->get();
-
-                // Payment method breakdown
-                $paymentMethods = Payment::select(
-                        'payment_method',
-                        DB::raw('COUNT(*) as transaction_count'),
-                        DB::raw('SUM(amount) as total_amount')
-                    )
-                    ->where('status', 'completed')
-                    ->where('amount', '>', 0)
-                    ->whereDate('processed_at', '>=', $dateFrom)
-                    ->whereDate('processed_at', '<=', $dateTo)
-                    ->groupBy('payment_method')
-                    ->orderBy('total_amount', 'desc')
-                    ->get();
-
-                return response()->json([
-                    'success' => true,
-                    'data' => [
-                        'sales_by_period' => $salesByPeriod,
-                        'top_products' => $topProducts,
-                        'sales_by_category' => $salesByCategory,
-                        'payment_methods' => $paymentMethods,
-                        'period' => [
-                            'from' => $dateFrom,
-                            'to' => $dateTo,
-                        ],
-                    ],
-                ]);
-            }
-
-            return view('reports.sales-analytics', compact('dateFrom', 'dateTo'));
-        } catch (\Exception $e) {
-            Log::error('Sales analytics error: ' . $e->getMessage());
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to load sales analytics.',
-                ], 500);
-            }
-
-            return back()->with('error', 'Failed to load sales analytics.');
-        }
-    }
-
-    /**
-     * Get inventory report
-     */
-    public function inventoryReport(Request $request)
-    {
-        try {
-            if ($request->expectsJson()) {
-                $products = Product::with('category')
-                    ->select([
-                        'id', 'name', 'sku', 'stock_quantity', 'min_stock_level',
-                        'cost_price', 'price', 'category_id',
-                        DB::raw('stock_quantity * cost_price as inventory_value'),
-                        DB::raw('CASE WHEN stock_quantity <= min_stock_level THEN "low" WHEN stock_quantity = 0 THEN "out" ELSE "good" END as stock_status')
-                    ])
-                    ->when($request->category_id, function ($query, $categoryId) {
-                        return $query->where('category_id', $categoryId);
-                    })
-                    ->when($request->stock_status, function ($query, $status) {
-                        if ($status === 'low') {
-                            return $query->whereColumn('stock_quantity', '<=', 'min_stock_level');
-                        } elseif ($status === 'out') {
-                            return $query->where('stock_quantity', 0);
-                        } elseif ($status === 'good') {
-                            return $query->whereColumn('stock_quantity', '>', 'min_stock_level');
-                        }
-                        return $query;
-                    })
-                    ->orderBy('name')
-                    ->get();
-
-                $summary = [
-                    'total_products' => $products->count(),
-                    'total_inventory_value' => $products->sum('inventory_value'),
-                    'low_stock_items' => $products->where('stock_status', 'low')->count(),
-                    'out_of_stock_items' => $products->where('stock_status', 'out')->count(),
-                ];
-
-                return response()->json([
-                    'success' => true,
-                    'data' => [
-                        'products' => $products,
-                        'summary' => $summary,
-                    ],
-                ]);
-            }
-
-            return view('reports.inventory');
-        } catch (\Exception $e) {
-            Log::error('Inventory report error: ' . $e->getMessage());
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to load inventory report.',
-                ], 500);
-            }
-
-            return back()->with('error', 'Failed to load inventory report.');
-        }
-    }
-
-    /**
-     * Get customer analytics
-     */
-    public function customerAnalytics(Request $request)
-    {
-        try {
-            $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
-            $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
-
-            if ($request->expectsJson()) {
-                // Top customers by revenue
-                $topCustomers = Order::select(
-                        'users.name',
-                        'users.email',
-                        DB::raw('COUNT(orders.id) as total_orders'),
-                        DB::raw('SUM(orders.total_amount) as total_spent')
-                    )
-                    ->join('users', 'orders.user_id', '=', 'users.id')
-                    ->whereIn('orders.status', ['processing', 'shipped', 'delivered'])
-                    ->whereDate('orders.created_at', '>=', $dateFrom)
-                    ->whereDate('orders.created_at', '<=', $dateTo)
-                    ->groupBy('users.id', 'users.name', 'users.email')
-                    ->orderBy('total_spent', 'desc')
-                    ->limit(10)
-                    ->get();
-
-                // Customer acquisition
-                $newCustomers = DB::table('users')
-                    ->selectRaw("strftime('%Y-%m-%d', created_at) as period, COUNT(*) as new_customers")
-                    ->where('user_type', 'customer')
-                    ->whereDate('created_at', '>=', $dateFrom)
-                    ->whereDate('created_at', '<=', $dateTo)
-                    ->groupBy('period')
-                    ->orderBy('period')
-                    ->get();
-
-                // Payment type preferences
-                $paymentTypeStats = Order::select(
-                        'payment_type',
-                        DB::raw('COUNT(*) as order_count'),
-                        DB::raw('SUM(total_amount) as total_amount')
-                    )
-                    ->whereIn('status', ['processing', 'shipped', 'delivered'])
-                    ->whereDate('created_at', '>=', $dateFrom)
-                    ->whereDate('created_at', '<=', $dateTo)
-                    ->groupBy('payment_type')
-                    ->get();
-
-                return response()->json([
-                    'success' => true,
-                    'data' => [
-                        'top_customers' => $topCustomers,
-                        'new_customers' => $newCustomers,
-                        'payment_type_stats' => $paymentTypeStats,
-                        'period' => [
-                            'from' => $dateFrom,
-                            'to' => $dateTo,
-                        ],
-                    ],
-                ]);
-            }
-
-            return view('reports.customers', compact('dateFrom', 'dateTo'));
-        } catch (\Exception $e) {
-            Log::error('Customer analytics error: ' . $e->getMessage());
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to load customer analytics.',
-                ], 500);
-            }
-
-            return back()->with('error', 'Failed to load customer analytics.');
-        }
-    }
-
-    /**
-     * Export report to CSV
-     */
-    public function exportReport(Request $request)
-    {
-        try {
-            $reportType = $request->type; // ledger, balance-sheet, profit-loss, sales-analytics, inventory, customers
+            $reportType = $request->type;
             $dateFrom = $request->date_from ?? Carbon::now()->startOfMonth()->format('Y-m-d');
             $dateTo = $request->date_to ?? Carbon::now()->endOfMonth()->format('Y-m-d');
 
             switch ($reportType) {
-                case 'ledger':
-                    return $this->exportLedger($dateFrom, $dateTo);
-                case 'profit-loss':
-                    return $this->exportProfitLoss($dateFrom, $dateTo);
-                case 'balance-sheet':
-                    return $this->exportBalanceSheet($request->as_of_date ?? Carbon::now()->format('Y-m-d'));
-                case 'sales-analytics':
-                    return $this->exportSalesAnalytics($request);
+                case 'sales':
+                    return $this->exportSalesPdf($dateFrom, $dateTo);
                 case 'inventory':
-                    return $this->exportInventory($request);
+                    return $this->exportInventoryPdf($request);
+                case 'orders':
+                    return $this->exportOrdersPdf($dateFrom, $dateTo, $request);
                 case 'customers':
-                    return $this->exportCustomerAnalytics($request);
+                    return $this->exportCustomersPdf($dateFrom, $dateTo);
+                case 'product-performance':
+                    return $this->exportProductPerformancePdf($dateFrom, $dateTo, $request);
+                case 'category-performance':
+                    return $this->exportCategoryPerformancePdf($dateFrom, $dateTo);
+                case 'payment-methods':
+                    return $this->exportPaymentMethodsPdf($dateFrom, $dateTo);
+                case 'installments':
+                    return $this->exportInstallmentsPdf($request);
+                case 'low-stock':
+                    return $this->exportLowStockPdf($request);
+                case 'revenue-trends':
+                    return $this->exportRevenueTrendsPdf($dateFrom, $dateTo, $request->period ?? 'daily');
                 default:
                     return response()->json(['success' => false, 'message' => 'Invalid report type'], 400);
             }
         } catch (\Exception $e) {
-            Log::error('Export error: ' . $e->getMessage());
+            Log::error('PDF Export error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Export failed'], 500);
         }
     }
 
-    private function exportLedger($dateFrom, $dateTo)
+    /**
+     * Get sales data
+     */
+    private function getSalesData($dateFrom, $dateTo): JsonResponse
     {
-        $data = $this->getLedgerData($dateFrom, $dateTo)->getData(true);
-        
-        $filename = "ledger_{$dateFrom}_to_{$dateTo}.csv";
-        
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
+        $sales = Order::with(['user', 'orderItems.product'])
+            ->whereIn('status', ['processing', 'shipped', 'delivered'])
+            ->whereDate('created_at', '>=', $dateFrom)
+            ->whereDate('created_at', '<=', $dateTo)
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $summary = [
+            'total_orders' => $sales->count(),
+            'total_revenue' => $sales->sum('total_amount'),
+            'total_items' => $sales->sum(function ($order) {
+                return $order->orderItems->sum('quantity');
+            }),
+            'average_order_value' => $sales->count() > 0 ? $sales->sum('total_amount') / $sales->count() : 0,
         ];
-        
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
-            
-            // Headers
-            fputcsv($file, ['Date', 'Description', 'Reference', 'Debit', 'Credit', 'Balance', 'Customer']);
-            
-            // Data
-            foreach ($data['data']['transactions'] as $transaction) {
-                fputcsv($file, [
-                    $transaction['date'],
-                    $transaction['description'],
-                    $transaction['reference'],
-                    $transaction['debit'],
-                    $transaction['credit'],
-                    $transaction['balance'],
-                    $transaction['customer'],
-                ]);
-            }
-            
-            fclose($file);
-        };
-        
-        return response()->stream($callback, 200, $headers);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'orders' => $sales,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
     }
 
-    private function exportProfitLoss($dateFrom, $dateTo)
+    /**
+     * Get inventory data
+     */
+    private function getInventoryData(Request $request): JsonResponse
     {
-        // Implementation similar to exportLedger
-        $data = $this->getProfitLossData($dateFrom, $dateTo)->getData(true);
-        
-        $filename = "profit_loss_{$dateFrom}_to_{$dateTo}.csv";
-        
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
-        ];
-        
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
-            
-            fputcsv($file, ['Account', 'Amount']);
-            fputcsv($file, ['Revenue', '']);
-            fputcsv($file, ['Sales Revenue', $data['data']['revenue']['sales_revenue']]);
-            fputcsv($file, ['Less: Refunds', -$data['data']['revenue']['refunds']]);
-            fputcsv($file, ['Net Revenue', $data['data']['revenue']['net_revenue']]);
-            fputcsv($file, ['', '']);
-            fputcsv($file, ['Cost of Goods Sold', -$data['data']['cogs']]);
-            fputcsv($file, ['Gross Profit', $data['data']['gross_profit']]);
-            fputcsv($file, ['', '']);
-            fputcsv($file, ['Operating Expenses', '']);
-            foreach ($data['data']['expenses'] as $key => $value) {
-                if ($key !== 'total_expenses') {
-                    fputcsv($file, [ucwords(str_replace('_', ' ', $key)), -$value]);
+        $products = Product::with('category')
+            ->when($request->category_id, function ($query, $categoryId) {
+                return $query->where('category_id', $categoryId);
+            })
+            ->when($request->stock_status, function ($query, $status) {
+                if ($status === 'low') {
+                    return $query->whereColumn('stock_quantity', '<=', 'min_stock_level');
+                } elseif ($status === 'out') {
+                    return $query->where('stock_quantity', 0);
+                } elseif ($status === 'good') {
+                    return $query->whereColumn('stock_quantity', '>', 'min_stock_level');
                 }
-            }
-            fputcsv($file, ['Total Expenses', -$data['data']['expenses']['total_expenses']]);
-            fputcsv($file, ['', '']);
-            fputcsv($file, ['Net Profit', $data['data']['net_profit']]);
-            
-            fclose($file);
-        };
-        
-        return response()->stream($callback, 200, $headers);
-    }
+                return $query;
+            })
+            ->orderBy('name')
+            ->get();
 
-    private function exportBalanceSheet($asOfDate)
-    {
-        // Implementation for balance sheet export
-        $data = $this->getBalanceSheetData($asOfDate)->getData(true);
-
-        $filename = "balance_sheet_{$asOfDate}.csv";
-
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
+        $summary = [
+            'total_products' => $products->count(),
+            'total_value' => $products->sum(function ($product) {
+                return $product->stock_quantity * $product->cost_price;
+            }),
+            'low_stock' => $products->where('stock_quantity', '<=', DB::raw('min_stock_level'))->count(),
+            'out_of_stock' => $products->where('stock_quantity', 0)->count(),
         ];
 
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
-
-            fputcsv($file, ['Balance Sheet', 'Amount']);
-            fputcsv($file, ['ASSETS', '']);
-            fputcsv($file, ['Current Assets:', '']);
-            foreach ($data['data']['assets']['current_assets'] as $key => $value) {
-                if ($key !== 'total') {
-                    fputcsv($file, ['  ' . ucwords(str_replace('_', ' ', $key)), $value]);
-                }
-            }
-            fputcsv($file, ['Total Assets', $data['data']['assets']['total_assets']]);
-            fputcsv($file, ['', '']);
-            fputcsv($file, ['LIABILITIES & EQUITY', '']);
-            fputcsv($file, ['Total Equity', $data['data']['equity']['total_equity']]);
-
-            fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'products' => $products,
+                'summary' => $summary,
+            ],
+        ]);
     }
 
     /**
-     * Export sales analytics to CSV
+     * Get orders data
      */
-    private function exportSalesAnalytics(Request $request): StreamedResponse
+    private function getOrdersData($dateFrom, $dateTo, Request $request): JsonResponse
     {
-        $data = $this->salesAnalytics($request)->getData(true);
+        $orders = Order::with(['user', 'orderItems.product'])
+            ->when($request->status, function ($query, $status) {
+                return $query->where('status', $status);
+            })
+            ->when($request->payment_type, function ($query, $paymentType) {
+                return $query->where('payment_type', $paymentType);
+            })
+            ->whereDate('created_at', '>=', $dateFrom)
+            ->whereDate('created_at', '<=', $dateTo)
+            ->orderBy('created_at', 'desc')
+            ->get();
 
-        $filename = "sales_analytics_{$request->date_from}_to_{$request->date_to}.csv";
-
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
+        $summary = [
+            'total_orders' => $orders->count(),
+            'total_revenue' => $orders->sum('total_amount'),
+            'pending_orders' => $orders->where('status', 'pending')->count(),
+            'processing_orders' => $orders->where('status', 'processing')->count(),
+            'shipped_orders' => $orders->where('status', 'shipped')->count(),
+            'delivered_orders' => $orders->where('status', 'delivered')->count(),
         ];
 
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
-
-            // Sales by Period
-            fputcsv($file, ['Sales by Period']);
-            fputcsv($file, ['Period', 'Orders Count', 'Total Sales']);
-            foreach ($data['data']['sales_by_period'] as $item) {
-                fputcsv($file, [$item['period'], $item['orders_count'], $item['total_sales']]);
-            }
-
-            fputcsv($file, ['']); // Empty row
-
-            // Top Products
-            fputcsv($file, ['Top Products']);
-            fputcsv($file, ['Product Name', 'Total Sold', 'Total Revenue']);
-            foreach ($data['data']['top_products'] as $product) {
-                fputcsv($file, [$product['name'], $product['total_sold'], $product['total_revenue']]);
-            }
-
-            fputcsv($file, ['']); // Empty row
-
-            // Sales by Category
-            fputcsv($file, ['Sales by Category']);
-            fputcsv($file, ['Category', 'Total Sold', 'Total Revenue']);
-            foreach ($data['data']['sales_by_category'] as $category) {
-                fputcsv($file, [$category['name'], $category['total_sold'], $category['total_revenue']]);
-            }
-
-            fputcsv($file, ['']); // Empty row
-
-            // Payment Methods
-            fputcsv($file, ['Payment Methods']);
-            fputcsv($file, ['Method', 'Transaction Count', 'Total Amount']);
-            foreach ($data['data']['payment_methods'] as $method) {
-                fputcsv($file, [$method['payment_method'], $method['transaction_count'], $method['total_amount']]);
-            }
-
-            fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'orders' => $orders,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
     }
 
     /**
-     * Export inventory report to CSV
+     * Get customers data
      */
-    private function exportInventory(Request $request): StreamedResponse
+    private function getCustomersData($dateFrom, $dateTo): JsonResponse
     {
-        $data = $this->inventoryReport($request)->getData(true);
+        $customers = User::where('user_type', 'customer')
+            ->with(['orders' => function ($query) use ($dateFrom, $dateTo) {
+                $query->whereDate('created_at', '>=', $dateFrom)
+                      ->whereDate('created_at', '<=', $dateTo);
+            }])
+            ->withCount(['orders' => function ($query) use ($dateFrom, $dateTo) {
+                $query->whereDate('created_at', '>=', $dateFrom)
+                      ->whereDate('created_at', '<=', $dateTo);
+            }])
+            ->orderBy('name')
+            ->get()
+            ->map(function ($customer) {
+                return [
+                    'id' => $customer->id,
+                    'name' => $customer->name,
+                    'email' => $customer->email,
+                    'phone' => $customer->phone,
+                    'total_orders' => $customer->orders_count,
+                    'total_spent' => $customer->orders->sum('total_amount'),
+                    'last_order_date' => $customer->orders->max('created_at'),
+                ];
+            });
 
-        $filename = "inventory_report_" . date('Y-m-d') . ".csv";
-
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
+        $summary = [
+            'total_customers' => $customers->count(),
+            'active_customers' => $customers->where('total_orders', '>', 0)->count(),
+            'total_revenue' => $customers->sum('total_spent'),
+            'average_order_value' => $customers->where('total_orders', '>', 0)->avg('total_spent'),
         ];
 
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
-
-            // Summary
-            fputcsv($file, ['Inventory Summary']);
-            fputcsv($file, ['Total Products', $data['data']['summary']['total_products']]);
-            fputcsv($file, ['Total Inventory Value', $data['data']['summary']['total_inventory_value']]);
-            fputcsv($file, ['Low Stock Items', $data['data']['summary']['low_stock_items']]);
-            fputcsv($file, ['Out of Stock Items', $data['data']['summary']['out_of_stock_items']]);
-
-            fputcsv($file, ['']); // Empty row
-
-            // Products
-            fputcsv($file, ['Product Details']);
-            fputcsv($file, ['Name', 'SKU', 'Category', 'Stock Quantity', 'Min Stock Level', 'Stock Status', 'Cost Price', 'Selling Price', 'Inventory Value']);
-            foreach ($data['data']['products'] as $product) {
-                fputcsv($file, [
-                    $product['name'],
-                    $product['sku'] ?? 'N/A',
-                    $product['category']['name'] ?? 'N/A',
-                    $product['stock_quantity'],
-                    $product['min_stock_level'],
-                    $product['stock_status'],
-                    $product['cost_price'],
-                    $product['price'],
-                    $product['inventory_value']
-                ]);
-            }
-
-            fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'customers' => $customers,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
     }
 
     /**
-     * Export customer analytics to CSV
+     * Get product performance data
      */
-    private function exportCustomerAnalytics(Request $request): StreamedResponse
+    private function getProductPerformanceData($dateFrom, $dateTo, Request $request): JsonResponse
     {
-        $data = $this->customerAnalytics($request)->getData(true);
+        // Get current tenant connection
+        $tenantConnection = config('multitenancy.tenant_database_connection_name') ?? 'tenant';
 
-        $filename = "customer_analytics_{$request->date_from}_to_{$request->date_to}.csv";
+        $products = DB::connection($tenantConnection)
+            ->table('order_items')
+            ->join('products', 'order_items.product_id', '=', 'products.id')
+            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->join('categories', 'products.category_id', '=', 'categories.id')
+            ->whereIn('orders.status', ['processing', 'shipped', 'delivered'])
+            ->whereDate('orders.created_at', '>=', $dateFrom)
+            ->whereDate('orders.created_at', '<=', $dateTo)
+            ->when($request->category_id, function ($query, $categoryId) {
+                return $query->where('products.category_id', $categoryId);
+            })
+            ->select(
+                'products.id',
+                'products.name',
+                'products.sku',
+                'products.price',
+                'products.cost_price',
+                'categories.name as category_name',
+                DB::raw('SUM(order_items.quantity) as total_sold'),
+                DB::raw('SUM(order_items.total_price) as total_revenue'),
+                DB::raw('COUNT(DISTINCT orders.id) as order_count')
+            )
+            ->groupBy('products.id', 'products.name', 'products.sku', 'products.price', 'products.cost_price', 'categories.name')
+            ->orderBy('total_revenue', 'desc')
+            ->get()
+            ->map(function ($product) {
+                $totalCost = $product->total_sold * $product->cost_price;
+                $profit = $product->total_revenue - $totalCost;
+                $profitMargin = $product->total_revenue > 0 ? ($profit / $product->total_revenue) * 100 : 0;
 
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename={$filename}",
+                return [
+                    'id' => $product->id,
+                    'name' => $product->name,
+                    'sku' => $product->sku,
+                    'category' => $product->category_name,
+                    'price' => $product->price,
+                    'cost_price' => $product->cost_price,
+                    'total_sold' => $product->total_sold,
+                    'total_revenue' => $product->total_revenue,
+                    'order_count' => $product->order_count,
+                    'total_cost' => $totalCost,
+                    'profit' => $profit,
+                    'profit_margin' => $profitMargin,
+                ];
+            });
+
+        $summary = [
+            'total_products' => $products->count(),
+            'total_revenue' => $products->sum('total_revenue'),
+            'total_profit' => $products->sum('profit'),
+            'average_profit_margin' => $products->avg('profit_margin'),
+            'best_seller' => $products->first(),
         ];
 
-        $callback = function () use ($data) {
-            $file = fopen('php://output', 'w');
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'products' => $products,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
+    }
 
-            // Top Customers
-            fputcsv($file, ['Top Customers']);
-            fputcsv($file, ['Name', 'Email', 'Total Orders', 'Total Spent']);
-            foreach ($data['data']['top_customers'] as $customer) {
-                fputcsv($file, [$customer['name'], $customer['email'], $customer['total_orders'], $customer['total_spent']]);
-            }
+    /**
+     * Get category performance data
+     */
+    private function getCategoryPerformanceData($dateFrom, $dateTo): JsonResponse
+    {
+        // Get current tenant connection
+        $tenantConnection = config('multitenancy.tenant_database_connection_name') ?? 'tenant';
 
-            fputcsv($file, ['']); // Empty row
+        $categories = DB::connection($tenantConnection)
+            ->table('order_items')
+            ->join('products', 'order_items.product_id', '=', 'products.id')
+            ->join('categories', 'products.category_id', '=', 'categories.id')
+            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->whereIn('orders.status', ['processing', 'shipped', 'delivered'])
+            ->whereDate('orders.created_at', '>=', $dateFrom)
+            ->whereDate('orders.created_at', '<=', $dateTo)
+            ->select(
+                'categories.id',
+                'categories.name',
+                DB::raw('SUM(order_items.quantity) as total_sold'),
+                DB::raw('SUM(order_items.total_price) as total_revenue'),
+                DB::raw('COUNT(DISTINCT products.id) as product_count'),
+                DB::raw('COUNT(DISTINCT orders.id) as order_count')
+            )
+            ->groupBy('categories.id', 'categories.name')
+            ->orderBy('total_revenue', 'desc')
+            ->get();
 
-            // New Customers
-            fputcsv($file, ['New Customer Acquisition']);
-            fputcsv($file, ['Period', 'New Customers']);
-            foreach ($data['data']['new_customers'] as $item) {
-                fputcsv($file, [$item['period'], $item['new_customers']]);
-            }
+        $summary = [
+            'total_categories' => $categories->count(),
+            'total_revenue' => $categories->sum('total_revenue'),
+            'total_sold' => $categories->sum('total_sold'),
+            'best_category' => $categories->first(),
+        ];
 
-            fputcsv($file, ['']); // Empty row
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'categories' => $categories,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
+    }
 
-            // Payment Type Stats
-            fputcsv($file, ['Payment Type Preferences']);
-            fputcsv($file, ['Payment Type', 'Order Count', 'Total Amount']);
-            foreach ($data['data']['payment_type_stats'] as $stat) {
-                fputcsv($file, [$stat['payment_type'], $stat['order_count'], $stat['total_amount']]);
-            }
+    /**
+     * Get payment methods data
+     */
+    private function getPaymentMethodsData($dateFrom, $dateTo): JsonResponse
+    {
+        // Get current tenant connection
+        $tenantConnection = config('multitenancy.tenant_database_connection_name') ?? 'tenant';
 
-            fclose($file);
+        $paymentMethods = DB::connection($tenantConnection)
+            ->table('payments')
+            ->join('orders', 'payments.order_id', '=', 'orders.id')
+            ->where('payments.status', 'completed')
+            ->whereDate('payments.processed_at', '>=', $dateFrom)
+            ->whereDate('payments.processed_at', '<=', $dateTo)
+            ->select(
+                'payments.payment_method',
+                DB::raw('COUNT(*) as transaction_count'),
+                DB::raw('SUM(payments.amount) as total_amount'),
+                DB::raw('AVG(payments.amount) as average_amount'),
+                DB::raw('COUNT(DISTINCT payments.order_id) as order_count')
+            )
+            ->groupBy('payments.payment_method')
+            ->orderBy('total_amount', 'desc')
+            ->get();
+
+        $summary = [
+            'total_methods' => $paymentMethods->count(),
+            'total_transactions' => $paymentMethods->sum('transaction_count'),
+            'total_amount' => $paymentMethods->sum('total_amount'),
+            'most_used' => $paymentMethods->first(),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'payment_methods' => $paymentMethods,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo],
+            ],
+        ]);
+    }
+
+    /**
+     * Get installments data
+     */
+    private function getInstallmentsData(Request $request): JsonResponse
+    {
+        // Get current tenant connection
+        $tenantConnection = config('multitenancy.tenant_database_connection_name') ?? 'tenant';
+
+        $installments = DB::connection($tenantConnection)
+            ->table('installments')
+            ->join('orders', 'installments.order_id', '=', 'orders.id')
+            ->join('users', 'orders.user_id', '=', 'users.id')
+            ->select(
+                'installments.*',
+                'orders.order_number',
+                'users.name as customer_name',
+                'users.email as customer_email'
+            )
+            ->when($request->status, function ($query, $status) {
+                return $query->where('installments.status', $status);
+            })
+            ->when($request->overdue_only, function ($query) {
+                return $query->where('installments.status', 'pending')
+                            ->where('installments.due_date', '<', now());
+            })
+            ->orderBy('installments.due_date', 'asc')
+            ->get();
+
+        $summary = [
+            'total_installments' => $installments->count(),
+            'pending_amount' => $installments->where('status', 'pending')->sum('total_amount'),
+            'paid_amount' => $installments->where('status', 'paid')->sum('total_amount'),
+            'overdue_count' => $installments->where('status', 'pending')
+                                          ->where('due_date', '<', now())->count(),
+            'overdue_amount' => $installments->where('status', 'pending')
+                                           ->where('due_date', '<', now())->sum('total_amount'),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'installments' => $installments,
+                'summary' => $summary,
+            ],
+        ]);
+    }
+
+    /**
+     * Get low stock data
+     */
+    private function getLowStockData(Request $request): JsonResponse
+    {
+        $products = Product::with('category')
+            ->where(function ($query) {
+                $query->whereColumn('stock_quantity', '<=', 'min_stock_level')
+                      ->orWhere('stock_quantity', 0);
+            })
+            ->when($request->category_id, function ($query, $categoryId) {
+                return $query->where('category_id', $categoryId);
+            })
+            ->orderBy('stock_quantity', 'asc')
+            ->get();
+
+        $summary = [
+            'total_low_stock' => $products->where('stock_quantity', '>', 0)->count(),
+            'total_out_of_stock' => $products->where('stock_quantity', 0)->count(),
+            'total_value_at_risk' => $products->sum(function ($product) {
+                return $product->stock_quantity * $product->cost_price;
+            }),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'products' => $products,
+                'summary' => $summary,
+            ],
+        ]);
+    }
+
+    /**
+     * Get revenue trends data
+     */
+    private function getRevenueTrendsData($dateFrom, $dateTo, $period): JsonResponse
+    {
+        // Get current tenant connection
+        $tenantConnection = config('multitenancy.tenant_database_connection_name') ?? 'tenant';
+
+        $dateFormat = match($period) {
+            'daily' => '%Y-%m-%d',
+            'weekly' => '%Y-%u',
+            'monthly' => '%Y-%m',
+            default => '%Y-%m-%d'
         };
 
-        return response()->stream($callback, 200, $headers);
+        $trends = DB::connection($tenantConnection)
+            ->table('orders')
+            ->whereIn('status', ['processing', 'shipped', 'delivered'])
+            ->whereDate('created_at', '>=', $dateFrom)
+            ->whereDate('created_at', '<=', $dateTo)
+            ->select(
+                DB::raw("strftime('$dateFormat', created_at) as period"),
+                DB::raw('COUNT(*) as order_count'),
+                DB::raw('SUM(total_amount) as revenue'),
+                DB::raw('AVG(total_amount) as avg_order_value')
+            )
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $summary = [
+            'total_periods' => $trends->count(),
+            'total_revenue' => $trends->sum('revenue'),
+            'total_orders' => $trends->sum('order_count'),
+            'average_revenue_per_period' => $trends->avg('revenue'),
+            'best_period' => $trends->sortByDesc('revenue')->first(),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'trends' => $trends,
+                'summary' => $summary,
+                'period' => ['from' => $dateFrom, 'to' => $dateTo, 'type' => $period],
+            ],
+        ]);
+    }
+
+    /**
+     * Export sales report as PDF
+     */
+    private function exportSalesPdf($dateFrom, $dateTo)
+    {
+        $data = $this->getSalesData($dateFrom, $dateTo)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.sales', [
+            'orders' => $data['orders'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "sales_report_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export inventory report as PDF
+     */
+    private function exportInventoryPdf(Request $request)
+    {
+        $data = $this->getInventoryData($request)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.inventory', [
+            'products' => $data['products'],
+            'summary' => $data['summary'],
+        ]);
+
+        $filename = "inventory_report_" . date('Y-m-d') . ".pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export orders report as PDF
+     */
+    private function exportOrdersPdf($dateFrom, $dateTo, Request $request)
+    {
+        $data = $this->getOrdersData($dateFrom, $dateTo, $request)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.orders', [
+            'orders' => $data['orders'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "orders_report_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export customers report as PDF
+     */
+    private function exportCustomersPdf($dateFrom, $dateTo)
+    {
+        $data = $this->getCustomersData($dateFrom, $dateTo)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.customers', [
+            'customers' => $data['customers'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "customers_report_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export product performance report as PDF
+     */
+    private function exportProductPerformancePdf($dateFrom, $dateTo, Request $request)
+    {
+        $data = $this->getProductPerformanceData($dateFrom, $dateTo, $request)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.product-performance', [
+            'products' => $data['products'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "product_performance_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export category performance report as PDF
+     */
+    private function exportCategoryPerformancePdf($dateFrom, $dateTo)
+    {
+        $data = $this->getCategoryPerformanceData($dateFrom, $dateTo)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.category-performance', [
+            'categories' => $data['categories'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "category_performance_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export payment methods report as PDF
+     */
+    private function exportPaymentMethodsPdf($dateFrom, $dateTo)
+    {
+        $data = $this->getPaymentMethodsData($dateFrom, $dateTo)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.payment-methods', [
+            'payment_methods' => $data['payment_methods'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "payment_methods_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export installments report as PDF
+     */
+    private function exportInstallmentsPdf(Request $request)
+    {
+        $data = $this->getInstallmentsData($request)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.installments', [
+            'installments' => $data['installments'],
+            'summary' => $data['summary'],
+        ]);
+
+        $filename = "installments_report_" . date('Y-m-d') . ".pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export low stock report as PDF
+     */
+    private function exportLowStockPdf(Request $request)
+    {
+        $data = $this->getLowStockData($request)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.low-stock', [
+            'products' => $data['products'],
+            'summary' => $data['summary'],
+        ]);
+
+        $filename = "low_stock_report_" . date('Y-m-d') . ".pdf";
+
+        return $pdf->download($filename);
+    }
+
+    /**
+     * Export revenue trends report as PDF
+     */
+    private function exportRevenueTrendsPdf($dateFrom, $dateTo, $period)
+    {
+        $data = $this->getRevenueTrendsData($dateFrom, $dateTo, $period)->getData(true)['data'];
+
+        $pdf = Pdf::loadView('reports.pdf.revenue-trends', [
+            'trends' => $data['trends'],
+            'summary' => $data['summary'],
+            'period' => $data['period'],
+        ]);
+
+        $filename = "revenue_trends_{$dateFrom}_to_{$dateTo}.pdf";
+
+        return $pdf->download($filename);
     }
 }

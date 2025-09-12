@@ -20,24 +20,63 @@ class CategoryController extends Controller
      */
     public function index(Request $request)
     {
+        // Handle DataTables server-side processing
+        if ($request->ajax() || $request->wantsJson()) {
+            $query = Category::with('parent', 'children');
+
+            // Apply custom filters
+            if ($request->has('search') && !empty($request->search)) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                      ->orWhere('description', 'like', "%{$search}%");
+                });
+            }
+
+            if ($request->has('status') && !empty($request->status)) {
+                $query->where('is_active', $request->status === 'active');
+            }
+
+            // Handle DataTables parameters
+            $totalRecords = $query->count();
+
+            // Apply ordering
+            if ($request->has('order') && isset($request->order[0])) {
+                $orderColumn = $request->order[0]['column'];
+                $orderDir = $request->order[0]['dir'];
+
+                $columns = ['id', 'name', 'parent_id', 'products_count', 'is_active', 'sort_order'];
+                if (isset($columns[$orderColumn])) {
+                    $query->orderBy($columns[$orderColumn], $orderDir);
+                }
+            } else {
+                $query->orderBy('sort_order')->orderBy('name');
+            }
+
+            // Apply pagination
+            $start = $request->get('start', 0);
+            $length = $request->get('length', 15);
+            $categories = $query->skip($start)->take($length)->get();
+
+            // Add computed fields
+            $categories->transform(function ($category) {
+                $category->products_count = $category->products()->count();
+                return $category;
+            });
+
+            return response()->json([
+                'draw' => intval($request->get('draw')),
+                'recordsTotal' => $totalRecords,
+                'recordsFiltered' => $totalRecords,
+                'data' => $categories
+            ]);
+        }
+
+        // Regular view response
         $categories = Category::with('parent', 'children')
-            ->when($request->search, function ($query, $search) {
-                return $query->where('name', 'like', "%{$search}%")
-                           ->orWhere('description', 'like', "%{$search}%");
-            })
-            ->when($request->status, function ($query, $status) {
-                return $query->where('is_active', $status === 'active');
-            })
             ->orderBy('sort_order')
             ->orderBy('name')
             ->paginate(15);
-
-        if ($request->ajax() || $request->wantsJson() || $request->expectsJson()) {
-            return response()->json([
-                'success' => true,
-                'data' => $categories,
-            ]);
-        }
 
         return view('categories.index', compact('categories'));
     }
@@ -51,7 +90,7 @@ class CategoryController extends Controller
             ->active()
             ->orderBy('name')
             ->get();
-            
+
         return view('categories.create', compact('parentCategories'));
     }
 
@@ -121,7 +160,7 @@ class CategoryController extends Controller
             ->active()
             ->orderBy('name')
             ->get();
-            
+
         return view('categories.edit', compact('category', 'parentCategories'));
     }
 

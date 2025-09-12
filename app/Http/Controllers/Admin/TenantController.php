@@ -33,9 +33,9 @@ class TenantController extends Controller
 		$validated = $request->validate([
 			'name' => 'required|string|max:255',
 			'domain' => 'required|string|max:255|unique:tenants,domain',
-			'is_active' => 'boolean',
 		]);
 		$validated['is_active'] = (bool)($validated['is_active'] ?? true);
+		$validated['database'] = 'localhost';
 		Tenant::create($validated);
 		return redirect()->route('admin.tenants.index')->with('success', 'Tenant created.');
 	}
@@ -69,5 +69,3 @@ class TenantController extends Controller
 		return response()->json(['success' => true, 'message' => 'Tenant status updated.', 'data' => $tenant]);
 	}
 }
-
-

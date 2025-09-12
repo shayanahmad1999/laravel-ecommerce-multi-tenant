@@ -38,30 +38,98 @@ class PaymentController extends Controller
      */
     public function index(Request $request)
     {
+        // Handle DataTables server-side processing
+        if ($request->ajax() || $request->wantsJson()) {
+            try {
+                $query = Payment::with(['order', 'user']);
+
+                // Apply custom filters
+                if ($request->has('search') && !empty($request->search)) {
+                    $search = $request->search;
+                    $query->where(function ($q) use ($search) {
+                        $q->where('payment_number', 'like', "%{$search}%")
+                          ->orWhere('transaction_id', 'like', "%{$search}%")
+                          ->orWhereHas('order', function ($orderQuery) use ($search) {
+                              $orderQuery->where('order_number', 'like', "%{$search}%");
+                          });
+                    });
+                }
+
+                if ($request->has('status') && !empty($request->status)) {
+                    $query->where('status', $request->status);
+                }
+
+                if ($request->has('payment_type') && !empty($request->payment_type)) {
+                    $query->where('payment_type', $request->payment_type);
+                }
+
+                if ($request->has('payment_method') && !empty($request->payment_method)) {
+                    $query->where('payment_method', $request->payment_method);
+                }
+
+                if ($request->has('date_from') && !empty($request->date_from)) {
+                    $query->whereDate('created_at', '>=', $request->date_from);
+                }
+
+                if ($request->has('date_to') && !empty($request->date_to)) {
+                    $query->whereDate('created_at', '<=', $request->date_to);
+                }
+
+                // For customers, only show their payments
+                if (!Auth::user()->isAdmin()) {
+                    $query->where('user_id', Auth::id());
+                }
+
+                // Handle DataTables parameters
+                $totalRecords = $query->count();
+
+                // Apply ordering
+                if ($request->has('order') && isset($request->order[0])) {
+                    $orderColumn = $request->order[0]['column'];
+                    $orderDir = $request->order[0]['dir'];
+
+                    $columns = ['payment_number', 'transaction_id', 'order_id', 'user_id', 'payment_type', 'payment_method', 'amount', 'status', 'created_at'];
+                    if (isset($columns[$orderColumn])) {
+                        if ($columns[$orderColumn] === 'order_id') {
+                            $query->join('orders', 'payments.order_id', '=', 'orders.id')
+                                  ->orderBy('orders.order_number', $orderDir);
+                        } elseif ($columns[$orderColumn] === 'user_id') {
+                            $query->join('users', 'payments.user_id', '=', 'users.id')
+                                  ->orderBy('users.name', $orderDir);
+                        } else {
+                            $query->orderBy($columns[$orderColumn], $orderDir);
+                        }
+                    }
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+
+                // Apply pagination
+                $start = $request->get('start', 0);
+                $length = $request->get('length', 15);
+                $payments = $query->skip($start)->take($length)->get();
+
+                return response()->json([
+                    'draw' => intval($request->get('draw')),
+                    'recordsTotal' => $totalRecords,
+                    'recordsFiltered' => $totalRecords,
+                    'data' => $payments
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Error fetching payments: ' . $e->getMessage());
+                return response()->json([
+                    'draw' => intval($request->get('draw')),
+                    'recordsTotal' => 0,
+                    'recordsFiltered' => 0,
+                    'data' => [],
+                    'error' => 'Failed to load payments.'
+                ], 500);
+            }
+        }
+
+        // Regular view response
         try {
-            $query = Payment::with(['order', 'user'])
-                ->when($request->search, function ($q, $search) {
-                    return $q->where('payment_number', 'like', "%{$search}%")
-                        ->orWhere('transaction_id', 'like', "%{$search}%")
-                        ->orWhereHas('order', function ($orderQuery) use ($search) {
-                            $orderQuery->where('order_number', 'like', "%{$search}%");
-                        });
-                })
-                ->when($request->status, function ($q, $status) {
-                    return $q->where('status', $status);
-                })
-                ->when($request->payment_type, function ($q, $type) {
-                    return $q->where('payment_type', $type);
-                })
-                ->when($request->payment_method, function ($q, $method) {
-                    return $q->where('payment_method', $method);
-                })
-                ->when($request->date_from, function ($q, $date) {
-                    return $q->whereDate('created_at', '>=', $date);
-                })
-                ->when($request->date_to, function ($q, $date) {
-                    return $q->whereDate('created_at', '<=', $date);
-                });
+            $query = Payment::with(['order', 'user']);
 
             // For customers, only show their payments
             if (!Auth::user()->isAdmin()) {
@@ -70,24 +138,9 @@ class PaymentController extends Controller
 
             $payments = $query->orderBy('created_at', 'desc')->paginate(15);
 
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => true,
-                    'data' => $payments,
-                ]);
-            }
-
             return view('payments.index', compact('payments'));
         } catch (\Exception $e) {
             Log::error('Error fetching payments: ' . $e->getMessage());
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to load payments.',
-                ], 500);
-            }
-
             return back()->with('error', 'Failed to load payments.');
         }
     }

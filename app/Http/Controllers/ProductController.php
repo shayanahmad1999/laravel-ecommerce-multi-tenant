@@ -22,34 +22,107 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $products = Product::with(['category'])
-            ->when($request->search, function ($query, $search) {
-                return $query->where('name', 'like', "%{$search}%")
-                           ->orWhere('sku', 'like', "%{$search}%")
-                           ->orWhere('description', 'like', "%{$search}%");
-            })
-            ->when($request->category_id, function ($query, $categoryId) {
-                return $query->where('category_id', $categoryId);
-            })
-            ->when($request->status, function ($query, $status) {
-                if ($status === 'active') {
-                    return $query->where('is_active', true);
-                } elseif ($status === 'inactive') {
-                    return $query->where('is_active', false);
-                } elseif ($status === 'low_stock') {
-                    return $query->lowStock();
+        // Handle AJAX requests from orders page (simple JSON format)
+        if ($request->ajax() || $request->wantsJson()) {
+            // Check if this is a DataTables request (has 'draw' parameter)
+            if ($request->has('draw')) {
+                // Handle DataTables server-side processing
+                $query = Product::with(['category']);
+
+                // Apply custom filters
+                if ($request->has('search') && !empty($request->search)) {
+                    $search = $request->search;
+                    $query->where(function ($q) use ($search) {
+                        $q->where('name', 'like', "%{$search}%")
+                          ->orWhere('sku', 'like', "%{$search}%")
+                          ->orWhere('description', 'like', "%{$search}%");
+                    });
                 }
-                return $query;
-            })
+
+                if ($request->has('category_id') && !empty($request->category_id)) {
+                    $query->where('category_id', $request->category_id);
+                }
+
+                if ($request->has('status') && !empty($request->status)) {
+                    $status = $request->status;
+                    if ($status === 'active') {
+                        $query->where('is_active', true);
+                    } elseif ($status === 'inactive') {
+                        $query->where('is_active', false);
+                    } elseif ($status === 'low_stock') {
+                        $query->whereColumn('stock_quantity', '<=', 'min_stock_level');
+                    }
+                }
+
+                // Handle DataTables parameters
+                $totalRecords = $query->count();
+
+                // Apply ordering
+                if ($request->has('order') && isset($request->order[0])) {
+                    $orderColumn = $request->order[0]['column'];
+                    $orderDir = $request->order[0]['dir'];
+
+                    $columns = ['id', 'name', 'sku', 'category_id', 'price', 'stock_quantity', 'is_active', 'created_at'];
+                    if (isset($columns[$orderColumn])) {
+                        $query->orderBy($columns[$orderColumn], $orderDir);
+                    }
+                } else {
+                    $query->orderBy('created_at', 'desc');
+                }
+
+                // Apply pagination
+                $start = $request->get('start', 0);
+                $length = $request->get('length', 15);
+                $products = $query->skip($start)->take($length)->get();
+
+                return response()->json([
+                    'draw' => intval($request->get('draw')),
+                    'recordsTotal' => $totalRecords,
+                    'recordsFiltered' => $totalRecords,
+                    'data' => $products
+                ]);
+            } else {
+                // Handle simple AJAX requests (from orders page)
+                $query = Product::with(['category'])
+                    ->active()
+                    ->inStock();
+
+                // Apply search filter
+                if ($request->has('search') && !empty($request->search)) {
+                    $search = $request->search;
+                    $query->where(function ($q) use ($search) {
+                        $q->where('name', 'like', "%{$search}%")
+                          ->orWhere('sku', 'like', "%{$search}%")
+                          ->orWhere('description', 'like', "%{$search}%");
+                    });
+                }
+
+                // Apply category filter
+                if ($request->has('category_id') && !empty($request->category_id)) {
+                    $query->where('category_id', $request->category_id);
+                }
+
+                // Apply pagination for orders page
+                $perPage = $request->get('per_page', 10);
+                $products = $query->orderBy('name')->paginate($perPage);
+
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'data' => $products->items(),
+                        'current_page' => $products->currentPage(),
+                        'last_page' => $products->lastPage(),
+                        'per_page' => $products->perPage(),
+                        'total' => $products->total(),
+                    ]
+                ]);
+            }
+        }
+
+        // Regular view response
+        $products = Product::with(['category'])
             ->orderBy('created_at', 'desc')
             ->paginate(15);
-
-        if ($request->ajax() || $request->wantsJson() || $request->expectsJson()) {
-            return response()->json([
-                'success' => true,
-                'data' => $products,
-            ]);
-        }
 
         $categories = Category::active()->get();
         return view('products.index', compact('products', 'categories'));

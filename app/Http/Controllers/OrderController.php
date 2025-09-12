@@ -27,26 +27,88 @@ class OrderController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Order::with(['user', 'orderItems.product', 'payments'])
-            ->when($request->search, function ($q, $search) {
-                return $q->where('order_number', 'like', "%{$search}%")
+        // Handle DataTables server-side processing
+        if ($request->ajax() || $request->wantsJson()) {
+            $query = Order::with(['user', 'orderItems.product', 'payments']);
+
+            // Apply custom filters
+            if ($request->has('search') && !empty($request->search)) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('order_number', 'like', "%{$search}%")
                         ->orWhereHas('user', function ($userQuery) use ($search) {
                             $userQuery->where('name', 'like', "%{$search}%")
-                                     ->orWhere('email', 'like', "%{$search}%");
+                                ->orWhere('email', 'like', "%{$search}%");
                         });
-            })
-            ->when($request->status, function ($q, $status) {
-                return $q->where('status', $status);
-            })
-            ->when($request->payment_type, function ($q, $paymentType) {
-                return $q->where('payment_type', $paymentType);
-            })
-            ->when($request->date_from, function ($q, $dateFrom) {
-                return $q->whereDate('created_at', '>=', $dateFrom);
-            })
-            ->when($request->date_to, function ($q, $dateTo) {
-                return $q->whereDate('created_at', '<=', $dateTo);
+                });
+            }
+
+            if ($request->has('status') && !empty($request->status)) {
+                $query->where('status', $request->status);
+            }
+
+            if ($request->has('payment_type') && !empty($request->payment_type)) {
+                $query->where('payment_type', $request->payment_type);
+            }
+
+            if ($request->has('date_from') && !empty($request->date_from)) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+
+            if ($request->has('date_to') && !empty($request->date_to)) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+
+            // For customers, only show their own orders
+            if (!Auth::user()->isAdmin()) {
+                $query->where('user_id', Auth::id());
+            }
+
+            // Handle DataTables parameters
+            $totalRecords = $query->count();
+
+            // Apply ordering
+            if ($request->has('order') && isset($request->order[0])) {
+                $orderColumn = $request->order[0]['column'];
+                $orderDir = $request->order[0]['dir'];
+
+                $columns = ['order_number', 'user_id', 'order_items', 'total_amount', 'payment_type', 'status', 'created_at'];
+                if (isset($columns[$orderColumn])) {
+                    if ($columns[$orderColumn] === 'user_id') {
+                        $query->join('users', 'orders.user_id', '=', 'users.id')
+                            ->orderBy('users.name', $orderDir);
+                    } elseif ($columns[$orderColumn] === 'order_items') {
+                        // For order items count, we can't easily sort by it in this context
+                        // Keep default ordering
+                    } else {
+                        $query->orderBy($columns[$orderColumn], $orderDir);
+                    }
+                }
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
+
+            // Apply pagination
+            $start = $request->get('start', 0);
+            $length = $request->get('length', 15);
+            $orders = $query->skip($start)->take($length)->get();
+
+            // Add computed fields
+            $orders->transform(function ($order) {
+                $order->order_items_count = $order->orderItems()->count();
+                return $order;
             });
+
+            return response()->json([
+                'draw' => intval($request->get('draw')),
+                'recordsTotal' => $totalRecords,
+                'recordsFiltered' => $totalRecords,
+                'data' => $orders
+            ]);
+        }
+
+        // Regular view response
+        $query = Order::with(['user', 'orderItems.product', 'payments']);
 
         // For customers, only show their own orders
         if (!Auth::user()->isAdmin()) {
@@ -54,13 +116,6 @@ class OrderController extends Controller
         }
 
         $orders = $query->orderBy('created_at', 'desc')->paginate(15);
-
-        if ($request->ajax() || $request->wantsJson() || $request->expectsJson()) {
-            return response()->json([
-                'success' => true,
-                'data' => $orders,
-            ]);
-        }
 
         return view('orders.index', compact('orders'));
     }
@@ -84,6 +139,7 @@ class OrderController extends Controller
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
+            'customer_id' => 'nullable|exists:users,id',
             'payment_type' => 'required|in:instant,installment',
             'installments' => 'required_if:payment_type,installment|integer|min:2|max:60',
             'shipping_address' => 'required|array',
@@ -112,7 +168,7 @@ class OrderController extends Controller
 
             foreach ($request->items as $item) {
                 $product = Product::findOrFail($item['product_id']);
-                
+
                 // Check stock availability
                 if (!$product->isInStock($item['quantity'])) {
                     throw new \Exception("Insufficient stock for product: {$product->name}");
@@ -137,9 +193,16 @@ class OrderController extends Controller
             $shippingCost = $subtotal > 100 ? 0 : 10; // Free shipping over $100
             $totalAmount = $subtotal + $taxAmount + $shippingCost;
 
+            // Determine the customer for the order
+            $customerId = $request->customer_id;
+            if (!$customerId || !Auth::user()->isAdmin()) {
+                // If no customer specified or user is not admin, use authenticated user
+                $customerId = Auth::id();
+            }
+
             // Create order
             $order = Order::create([
-                'user_id' => Auth::id(),
+                'user_id' => $customerId,
                 'status' => 'pending',
                 'subtotal' => $subtotal,
                 'tax_amount' => $taxAmount,
@@ -154,7 +217,7 @@ class OrderController extends Controller
             // Create order items and decrease stock
             foreach ($orderItems as $itemData) {
                 $order->orderItems()->create($itemData);
-                
+
                 // Decrease product stock
                 $product = Product::find($itemData['product_id']);
                 $product->decreaseStock($itemData['quantity']);
@@ -173,7 +236,6 @@ class OrderController extends Controller
                 'data' => $order->load(['orderItems.product', 'user']),
                 'order_id' => $order->id,
             ]);
-
         } catch (\Exception $e) {
             DB::rollback();
             return response()->json([
@@ -267,10 +329,10 @@ class OrderController extends Controller
     private function createInstallments(Order $order, int $installmentCount)
     {
         $installmentAmount = $order->total_amount / $installmentCount;
-        
+
         for ($i = 1; $i <= $installmentCount; $i++) {
             $dueDate = Carbon::now()->addMonths($i);
-            
+
             Installment::create([
                 'order_id' => $order->id,
                 'installment_number' => $i,
@@ -289,7 +351,7 @@ class OrderController extends Controller
     public function getStatistics(Request $request): JsonResponse
     {
         $query = Order::query();
-        
+
         // Filter by date range if provided
         if ($request->date_from) {
             $query->whereDate('created_at', '>=', $request->date_from);
@@ -339,7 +401,7 @@ class OrderController extends Controller
         }
 
         $product = Product::findOrFail($request->product_id);
-        
+
         if (!$product->isInStock($request->quantity)) {
             return response()->json([
                 'success' => false,
@@ -350,7 +412,7 @@ class OrderController extends Controller
         // Store cart in session
         $cart = session('cart', []);
         $productId = $request->product_id;
-        
+
         if (isset($cart[$productId])) {
             $cart[$productId]['quantity'] += $request->quantity;
         } else {
@@ -380,7 +442,7 @@ class OrderController extends Controller
     {
         $cart = session('cart', []);
         $cartTotal = 0;
-        
+
         foreach ($cart as &$item) {
             $item['total'] = $item['price'] * $item['quantity'];
             $cartTotal += $item['total'];
@@ -450,7 +512,7 @@ class OrderController extends Controller
     public function checkout(Request $request): JsonResponse
     {
         $cart = session('cart', []);
-        
+
         if (empty($cart)) {
             return response()->json([
                 'success' => false,
@@ -459,6 +521,7 @@ class OrderController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
+            'customer_id' => 'nullable|exists:users,id',
             'payment_type' => 'required|in:instant,installment',
             'installments' => 'required_if:payment_type,installment|integer|min:2|max:60',
             'shipping_address' => 'required|array',
@@ -488,11 +551,11 @@ class OrderController extends Controller
 
             $orderData = array_merge($request->all(), ['items' => $items]);
             $orderRequest = new Request($orderData);
-            
+
             // Use store method to create order
             $response = $this->store($orderRequest);
             $responseData = $response->getData(true);
-            
+
             if (!$responseData['success']) {
                 throw new \Exception($responseData['message']);
             }
@@ -508,7 +571,6 @@ class OrderController extends Controller
                 'order_id' => $responseData['order_id'],
                 'data' => $responseData['data'],
             ]);
-
         } catch (\Exception $e) {
             DB::rollback();
             return response()->json([
