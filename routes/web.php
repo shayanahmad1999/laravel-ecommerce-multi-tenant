@@ -12,11 +12,11 @@ use App\Http\Controllers\Admin\RolePermissionController as AdminRolePermissionCo
 use App\Http\Controllers\DashboardController;
 
 // Public routes (within tenant context for product display)
-Route::middleware(['tenant'])->group(function () {
+// Route::middleware(['tenant'])->group(function () {
     Route::get('/', function () {
         return view('welcome');
     })->name('home');
-});
+// });
 
 // Authentication routes
 Auth::routes();
